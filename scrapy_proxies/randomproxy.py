@@ -21,7 +21,10 @@
 import re
 import random
 import base64
+import contextlib
 import logging
+
+CUSTOM_PROXY_REGEX = '(\w+://)([^:]+?:[^@]+?@)?(.+)'
 
 log = logging.getLogger('scrapy.proxies')
 
@@ -31,47 +34,43 @@ class Mode:
 
 
 class RandomProxy(object):
+    proxy_matcher = re.compile(CUSTOM_PROXY_REGEX)
+
     def __init__(self, settings):
         self.mode = settings.get('PROXY_MODE')
         self.proxy_list = settings.get('PROXY_LIST')
         self.chosen_proxy = ''
-
-        if self.mode == Mode.RANDOMIZE_PROXY_EVERY_REQUESTS or self.mode == Mode.RANDOMIZE_PROXY_ONCE:
-            if self.proxy_list is None:
-                raise KeyError('PROXY_LIST setting is missing')
-            self.proxies = {}
-            fin = open(self.proxy_list)
-            try:
-                for line in fin.readlines():
-                    parts = re.match('(\w+://)([^:]+?:[^@]+?@)?(.+)', line.strip())
-                    if not parts:
-                        continue
-
-                    # Cut trailing @
-                    if parts.group(2):
-                        user_pass = parts.group(2)[:-1]
-                    else:
-                        user_pass = ''
-
-                    self.proxies[parts.group(1) + parts.group(3)] = user_pass
-            finally:
-                fin.close()
-            if self.mode == Mode.RANDOMIZE_PROXY_ONCE:
-                self.chosen_proxy = random.choice(list(self.proxies.keys()))
+        if self.mode in [Mode.RANDOMIZE_PROXY_EVERY_REQUESTS, Mode.RANDOMIZE_PROXY_ONCE]:
+            self._parse_proxies()
         elif self.mode == Mode.SET_CUSTOM_PROXY:
-            custom_proxy = settings.get('CUSTOM_PROXY')
-            self.proxies = {}
-            parts = re.match('(\w+://)([^:]+?:[^@]+?@)?(.+)', custom_proxy.strip())
-            if not parts:
-                raise ValueError('CUSTOM_PROXY is not well formatted')
+            self._parse_custom_proxies(settings)
 
-            if parts.group(2):
-                user_pass = parts.group(2)[:-1]
-            else:
-                user_pass = ''
+    def _parse_custom_proxies(self, settings):
+        custom_proxy = settings.get('CUSTOM_PROXY')
+        self.proxies = {}
+        parts = self.proxy_matcher.match(custom_proxy.strip())
+        if not parts:
+            raise ValueError('CUSTOM_PROXY is not well formatted')
+        user_pass = parts[2][:-1] if parts[2] else ''
+        self.proxies[parts[1] + parts[3]] = user_pass
+        self.chosen_proxy = parts[1] + parts[3]
 
-            self.proxies[parts.group(1) + parts.group(3)] = user_pass
-            self.chosen_proxy = parts.group(1) + parts.group(3)
+    def _parse_proxies(self):
+        if self.proxy_list is None:
+            raise KeyError('PROXY_LIST setting is missing')
+        self.proxies = {}
+        fin = open(self.proxy_list)
+        try:
+            for line in fin:
+                parts = self.proxy_matcher.match(line.strip())
+                if not parts:
+                    continue
+                user_pass = parts[2][:-1] if parts[2] else ''
+                self.proxies[parts[1] + parts[3]] = user_pass
+        finally:
+            fin.close()
+        if self.mode == Mode.RANDOMIZE_PROXY_ONCE:
+            self.chosen_proxy = random.choice(list(self.proxies.keys()))
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -79,9 +78,8 @@ class RandomProxy(object):
 
     def process_request(self, request, spider):
         # Don't overwrite with a random one (server-side state for IP)
-        if 'proxy' in request.meta:
-            if request.meta["exception"] is False:
-                return
+        if 'proxy' in request.meta and request.meta["exception"] is False:
+            return
         request.meta["exception"] = False
         if len(self.proxies) == 0:
             raise ValueError('All proxies are unusable, cannot proceed')
@@ -91,28 +89,29 @@ class RandomProxy(object):
         else:
             proxy_address = self.chosen_proxy
 
-        proxy_user_pass = self.proxies[proxy_address]
-
-        if proxy_user_pass:
+        if proxy_user_pass := self.proxies[proxy_address]:
             request.meta['proxy'] = proxy_address
-            basic_auth = 'Basic ' + base64.b64encode(proxy_user_pass.encode()).decode()
+            basic_auth = f'Basic {base64.b64encode(proxy_user_pass.encode()).decode()}'
             request.headers['Proxy-Authorization'] = basic_auth
         else:
             log.debug('Proxy user pass not found')
-        log.debug('Using proxy <%s>, %d proxies left' % (
-                proxy_address, len(self.proxies)))
+        log.debug('Using proxy <%s>, %d proxies left' % (proxy_address, len(self.proxies)))
 
     def process_exception(self, request, exception, spider):
         if 'proxy' not in request.meta:
             return
-        if self.mode == Mode.RANDOMIZE_PROXY_EVERY_REQUESTS or self.mode == Mode.RANDOMIZE_PROXY_ONCE:
-            proxy = request.meta['proxy']
-            try:
-                del self.proxies[proxy]
-            except KeyError:
-                pass
-            request.meta["exception"] = True
-            if self.mode == Mode.RANDOMIZE_PROXY_ONCE:
-                self.chosen_proxy = random.choice(list(self.proxies.keys()))
-            log.info('Removing failed proxy <%s>, %d proxies left' % (
-                proxy, len(self.proxies)))
+        if self.mode == Mode.RANDOMIZE_PROXY_EVERY_REQUESTS:
+            proxy = self._extracted_from_process_exception(request)
+            log.info('Removing failed proxy <%s>, %d proxies left' % (proxy, len(self.proxies)))
+
+        elif self.mode == Mode.RANDOMIZE_PROXY_ONCE:
+            proxy = self._extracted_from_process_exception(request)
+            self.chosen_proxy = random.choice(list(self.proxies.keys()))
+            log.info('Removing failed proxy <%s>, %d proxies left' % (proxy, len(self.proxies)))
+
+    def _extracted_from_process_exception(self, request):
+        result = request.meta['proxy']
+        with contextlib.suppress(KeyError):
+            del self.proxies[result]
+        request.meta["exception"] = True
+        return result
