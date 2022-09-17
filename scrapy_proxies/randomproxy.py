@@ -36,6 +36,13 @@ class Mode:
 class RandomProxy(object):
     proxy_matcher = re.compile(CUSTOM_PROXY_REGEX)
 
+    def _select_proxy(self):
+        if self.mode == Mode.RANDOMIZE_PROXY_ONCE:
+            return self.chosen_proxy or random.choice(list(self.proxies.keys()))
+        if self.mode == Mode.RANDOMIZE_PROXY_EVERY_REQUESTS:
+            return random.choice(list(self.proxies.keys()))
+        return self.chosen_proxy
+
     def __init__(self, settings):
         self.mode = settings.get('PROXY_MODE')
         self.proxy_list = settings.get('PROXY_LIST')
@@ -69,8 +76,7 @@ class RandomProxy(object):
                 self.proxies[parts[1] + parts[3]] = user_pass
         finally:
             fin.close()
-        if self.mode == Mode.RANDOMIZE_PROXY_ONCE:
-            self.chosen_proxy = random.choice(list(self.proxies.keys()))
+        self.chosen_proxy = self._select_proxy()
 
     @classmethod
     def from_crawler(cls, crawler):
@@ -83,12 +89,7 @@ class RandomProxy(object):
         request.meta["exception"] = False
         if len(self.proxies) == 0:
             raise ValueError('All proxies are unusable, cannot proceed')
-
-        if self.mode == Mode.RANDOMIZE_PROXY_EVERY_REQUESTS:
-            proxy_address = random.choice(list(self.proxies.keys()))
-        else:
-            proxy_address = self.chosen_proxy
-
+        proxy_address = self._select_proxy()
         request.meta['proxy'] = proxy_address
         if proxy_user_pass := self.proxies[proxy_address]:
             basic_auth = f'Basic {base64.b64encode(proxy_user_pass.encode()).decode()}'
@@ -105,7 +106,7 @@ class RandomProxy(object):
 
         elif self.mode == Mode.RANDOMIZE_PROXY_ONCE:
             proxy = self._extracted_from_process_exception(request)
-            self.chosen_proxy = random.choice(list(self.proxies.keys()))
+            self.chosen_proxy = self._select_proxy()
             log.info('Removing failed proxy <%s>, %d proxies left' % (proxy, len(self.proxies)))
 
     def _extracted_from_process_exception(self, request):
