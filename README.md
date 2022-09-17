@@ -7,12 +7,14 @@ improve crawling speed.
 Get your proxy list from sites like http://www.hidemyass.com/ (copy-paste into text file
 and reformat to http://host:port format)
 
+Forked from https://github.com/aivarsk/scrapy-proxies
+
 Install
 --------
 
 The quick way:
 
-    pip install scrapy_proxies
+    pip install git+https://github.com/hamedsh/scrapy-proxies.git
 
 Or checkout the source and run
 

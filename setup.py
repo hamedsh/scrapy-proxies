@@ -3,10 +3,10 @@ import sys
 from distutils.core import setup
 
 setup(name='scrapy-proxies',
-        version='0.4',
+        version='0.5',
         description='Scrapy Proxies: random proxy middleware for Scrapy',
-        author='Aivars Kalvans',
-        author_email='aivars.kalvans@gmail.com',
-        url='https://github.com/aivarsk/scrapy-proxies',
+        author='Hamed Sheykhlou',
+        author_email='sheykhlou.h@gmail.com',
+        url='https://github.com/hamedsh/scrapy-proxies',
         packages=['scrapy_proxies'],
         )
